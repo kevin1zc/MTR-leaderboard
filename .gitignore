@@ -5,3 +5,5 @@
 .pydevproject
 *.sh
 *.xml
+.idea/
+.vscode/

@@ -1,6 +1,6 @@
  #!/bin/bash
 
-export TEAM_AGENT=$LEADERBOARD_ROOT/leaderboard/autoagents/human_agent.py
+export TEAM_AGENT=$LEADERBOARD_ROOT/leaderboard/autoagents/mtr_agent.py
 
 export ROUTES=$LEADERBOARD_ROOT/data/routes_devtest.xml
 export ROUTES_SUBSET=0

@@ -1,0 +1,379 @@
+<routes>
+   <route id="0" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="983.5" y="5382.2" z="371"/>
+         <position x="984.7" y="5582.7" z="364"/>
+      </waypoints>
+      <scenarios>
+      <scenario name="ParkingExit_1" type="ParkingExit">
+            <trigger_point x="983.5" y="5382.2" z="371" yaw="90"/>
+            <direction value="right"/>
+            <front_vehicle_distance value="9"/>
+            <behind_vehicle_distance value="9"/>
+      </scenario>
+      </scenarios>
+   </route>
+
+   <route id="1" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="571.1" y="5579.4" z="370"/>
+         <position x="515.9" y="5636.0" z="364"/>
+      </waypoints>
+      <scenarios>
+      <scenario name="SignalizedJunctionLeftTurn_1" type="SignalizedJunctionLeftTurn">
+               <trigger_point x="571.1" y="5579.4" z="370" yaw="180"/>
+               <flow_speed value="16.6"/>
+               <source_dist_interval from="30" to="65"/>
+      </scenario>
+      </scenarios>
+   </route>
+
+   <route id="2" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="546.9" y="5982.8" z="362"/>
+         <position x="514.2" y="6045.2" z="364"/>
+      </waypoints>
+      <scenarios>
+      <scenario name="NonSignalizedJunctionRightTurn_1" type="NonSignalizedJunctionRightTurn">
+            <trigger_point x="546.9" y="5982.8" z="362" yaw="77"/>
+            <flow_speed value="8.3"/>
+            <source_dist_interval from="15" to="30"/>
+      </scenario>
+      </scenarios>
+   </route>
+
+   <route id="3" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="427.2" y="6086.8" z="359"/>
+         <position x="405.8" y="6106.8" z="364"/>
+         <position x="320.0" y="6167.0" z="364"/>
+         <position x="285.4" y="6186.5" z="364"/>
+      </waypoints>
+      <scenarios>
+       <scenario name="Accident_1" type="Accident">
+            <trigger_point x="427.2" y="6086.8" z="359" yaw="144"/>
+         </scenario>
+      </scenarios>
+   </route>
+
+   <route id="4" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="294.0" y="6153.2" z="358"/>
+         <position x="247.0" y="6100.3" z="364"/>
+      </waypoints>
+      <scenarios>
+       <scenario name="NonSignalizedJunctionLeftTurn_1" type="NonSignalizedJunctionLeftTurn">
+            <trigger_point x="294.0" y="6153.2" z="358" yaw="249"/>
+            <flow_speed value="8.3"/>
+            <source_dist_interval from="15" to="50"/>
+       </scenario>
+      </scenarios>
+   </route>
+
+   <route id="5" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="119.7" y="6100.9" z="358"/>
+         <position x="-22.7" y="6100.8" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="ControlLoss_1" type="ControlLoss">
+            <trigger_point x="119.7" y="6100.9" z="358" yaw="179"/>
+         </scenario>
+        </scenarios>
+   </route>
+
+   <route id="6" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="-68.8" y="6101.0" z="358"/>
+         <position x="-89.2" y="6103.7" z="364"/>
+         <position x="-172.9" y="6104.7" z="364"/>
+         <position x="-215.2" y="6101.7" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="ConstructionObstacleTwoWays_1" type="ConstructionObstacleTwoWays">
+            <trigger_point x="-68.8" y="6101.0" z="358" yaw="179"/>
+            <distance value="100"/>
+            <frequency from="35" to="110"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="7" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="-265.0" y="5963.4" z="361.4"/>
+         <position x="-265.2" y="5928.5" z="364"/>
+         <position x="-265.8" y="5895.7" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="OppositeVehicleTakingPriority_1" type="OppositeVehicleTakingPriority">
+            <trigger_point x="-265.0" y="5963.4" z="361.4" yaw="270"/>
+            <direction value="right"/>
+        </scenario>
+        </scenarios>
+   </route>
+
+  <route id="8" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="-225.1" y="5255.2" z="373"/>
+         <position x="-199.2" y="5314.5" z="364"/>
+         <position x="-180.1" y="5360.8" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="OppositeVehicleRunningRedLight_1" type="OppositeVehicleRunningRedLight">
+            <trigger_point x="-225.1" y="5255.2" z="373" yaw="65"/>
+            <direction value="left"/>
+        </scenario>
+        </scenarios>
+   </route>
+
+   <route id="9" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="983.5" y="5442.8" z="371.2"/>
+         <position x="985.2" y="5476.6" z="364"/>
+         <position x="983.3" y="5496.9" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="VehicleOpensDoorTwoWays_1" type="VehicleOpensDoorTwoWays">
+            <trigger_point x="983.5" y="5442.8" z="371.2" yaw="90.1"/>
+            <distance value="50"/>
+            <frequency from="40" to="90"/>
+         </scenario>
+         </scenarios>
+   </route>
+   
+   <route id="10" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="544.3" y="5579.4" z="369.1"/>
+         <position x="520.1" y="5585.6" z="364"/>
+         <position x="517.6" y="5620.0" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="VehicleTurningRoutePedestrian_1" type="VehicleTurningRoutePedestrian">
+            <trigger_point x="544.3" y="5579.4" z="369.1" yaw="179.9"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="11" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="518.0" y="5616.2" z="368.6"/>
+         <position x="518.8" y="5634.6" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="ParkedObstacleTwoWays_1" type="ParkedObstacleTwoWays">
+            <trigger_point x="518.0" y="5616.2" z="368.6" yaw="94.7"/>
+            <distance value="50"/>
+            <frequency from="50" to="85"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="12" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="-266.2" y="5888.6" z="363.9"/>
+         <position x="-266.5" y="5856.9" z="364"/>
+         <position x="-335.6" y="5816.1" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="InvadingTurn_1" type="InvadingTurn">
+            <trigger_point x="-266.2" y="5888.6" z="363.9" yaw="-90.6"/>
+            <distance value="100"/>
+            <offset value="0.6"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="13" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position  x="495.3" y="5727.6" z="367.4"/>
+         <position x="488.2" y="5632.9" z="364"/>
+         <position x="506.8" y="5880.4" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="DynamicObjectCrossing_1" type="DynamicObjectCrossing">
+            <trigger_point x="495.3" y="5727.6" z="367.4" yaw="103.5"/>
+            <distance value="40"/>
+            <blocker_model value="static.prop.advertisement"/>
+            <crossing_angle value="10"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="14" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position x="-711.8" y="6163.6" z="363.8"/>
+         <position x="-683.0" y="6223.0" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="VehicleTurningRoute_1" type="VehicleTurningRoute">
+            <trigger_point x="-711.8" y="6163.6" z="363.8" yaw="113.0"/>
+         </scenario>
+         </scenarios>
+   </route>
+
+   <route id="15" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position x="-119.5" y="5505.3" z="370"/>
+         <position x="-109.4" y="5520.3" z="364"/>
+         <position x="-42.9" y="5582.2" z="364"/>
+         <position x="2.3" y="5587.0" z="364"/>
+      </waypoints>
+      <scenarios>
+        <scenario name="ConstructionObstacle_2" type="ConstructionObstacle">
+            <trigger_point x="-119.5" y="5505.3" z="370" yaw="66"/>
+         </scenario>
+      </scenarios>
+   </route>
+
+   <route id="16" town="Town12">
+      <weathers>
+            <weather route_percentage="0"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="90.0" fog_density="2.0"/>
+            <weather route_percentage="100"
+               cloudiness="5.0" precipitation="0.0" precipitation_deposits="0.0" wetness="0.0"
+               wind_intensity="10.0" sun_azimuth_angle="-1.0" sun_altitude_angle="15.0" fog_density="2.0"/>
+      </weathers>
+      <waypoints>
+         <position x="753.9" y="5575.6" z="370.7"/>
+         <position x="658.6" y="5579.1" z="364"/>
+         <position x="628.4" y="5576.1" z="364"/>
+      </waypoints>
+      <scenarios>
+      <scenario name="HazardAtSideLane_2" type="HazardAtSideLane">
+            <trigger_point x="753.9" y="5575.6" z="370.7" yaw="179.9"/>
+            <distance value="50"/>
+            <bicycle_drive_distance value="80"/>
+            <bicycle_speed value="8"/>
+      </scenario>
+      </scenarios>
+   </route>
+</routes>

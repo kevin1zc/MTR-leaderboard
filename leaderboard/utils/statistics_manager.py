@@ -19,21 +19,15 @@ from srunner.scenariomanager.traffic_events import TrafficEventType
 from leaderboard.utils.checkpoint_tools import fetch_dict, save_dict
 
 PENALTY_VALUE_DICT = {
-    # Traffic events that substract a set amount of points.
-    TrafficEventType.COLLISION_PEDESTRIAN: 0.5,
-    TrafficEventType.COLLISION_VEHICLE: 0.6,
-    TrafficEventType.COLLISION_STATIC: 0.65,
-    TrafficEventType.TRAFFIC_LIGHT_INFRACTION: 0.7,
-    TrafficEventType.STOP_INFRACTION: 0.8,
-    TrafficEventType.SCENARIO_TIMEOUT: 0.7,
-    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: 0.7
-}
-PENALTY_PERC_DICT = {
-    # Traffic events that substract a varying amount of points. This is the per unit value.
-    # 'increases' means that the higher the value, the higher the penalty.
-    # 'decreases' means that the ideal value is 100 and the lower the value, the higher the penalty.
-    TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION: [0, 'increases'],  # All route traversed through outside lanes is ignored
-    TrafficEventType.MIN_SPEED_INFRACTION: [0.7, 'decreases'],
+    # Traffic events that substract a set amount of points
+    TrafficEventType.COLLISION_PEDESTRIAN: 1.0,
+    TrafficEventType.COLLISION_VEHICLE: 0.7,
+    TrafficEventType.COLLISION_STATIC: 0.6,
+    TrafficEventType.TRAFFIC_LIGHT_INFRACTION: 0.4,
+    TrafficEventType.STOP_INFRACTION: 0.25,
+    TrafficEventType.SCENARIO_TIMEOUT: 0.4,
+    TrafficEventType.YIELD_TO_EMERGENCY_VEHICLE: 0.4,
+    TrafficEventType.MIN_SPEED_INFRACTION: 0.4
 }
 
 PENALTY_NAME_DICT = {
@@ -278,10 +272,10 @@ class StatisticsManager(object):
                 if event_type == TrafficEventType.ROUTE_COMPLETION:
                     continue
                 string = "    " + str(e.get_type()).replace("TrafficEventType.", "")
-                if event_type in PENALTY_VALUE_DICT:
-                    string += " (penalty: " + str(PENALTY_VALUE_DICT[event_type]) + ")\n"
-                elif event_type in PENALTY_PERC_DICT:
+                if event_type in [TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION, TrafficEventType.MIN_SPEED_INFRACTION]:
                     string += " (value: " + str(round(e.get_dict()['percentage'], 3)) + "%)\n"
+                elif event_type in PENALTY_VALUE_DICT:
+                    string += " (penalty: " + str(PENALTY_VALUE_DICT[event_type]) + ")\n"
 
                 f.write(string)
 
@@ -333,17 +327,6 @@ class StatisticsManager(object):
             infraction_name = PENALTY_NAME_DICT[event.get_type()]
             route_record.infractions[infraction_name].append(event.get_message())
 
-        def set_score_penalty(score_penalty):
-            event_value = event.get_dict()['percentage']
-            penalty_value, penalty_type = PENALTY_PERC_DICT[event.get_type()]
-            if penalty_type == "decreases":
-                score_penalty *= (1 - (1 - penalty_value) * (1 - event_value / 100))
-            elif penalty_type == "increases":
-                score_penalty *= (1 - (1 - penalty_value) * event_value / 100)
-            else:
-                raise ValueError("Found a criteria with an unknown penalty type")
-            return score_penalty
-
         route_record = self._results.checkpoint.records[route_index]
         route_record.index = route_index
 
@@ -358,22 +341,40 @@ class StatisticsManager(object):
         route_record.meta['duration_game'] = round(duration_time_game, ROUND_DIGITS)
         route_record.meta['duration_system'] = round(duration_time_system, ROUND_DIGITS)
 
-        # Update the route infractions
         if self._scenario:
+
+            # Get the route score
+            for node in self._scenario.get_criteria():
+                for event in node.events:
+                    if event.get_type() == TrafficEventType.ROUTE_COMPLETION:
+                        score_route = event.get_dict()['route_completed']
+                        target_reached = score_route >= 100
+
+            # Check for a timeout.
             if self._scenario.timeout_node.timeout:
                 route_record.infractions['route_timeout'].append('Route timeout.')
                 failure_message = "Agent timed out"
 
+            infraction_value = 0
+
+            # Update the route infractions
             for node in self._scenario.get_criteria():
                 for event in node.events:
-                    # Traffic events that substract a set amount of points
+
+                    # Traffic events that substract a set amount of points. Save the infraction
                     if event.get_type() in PENALTY_VALUE_DICT:
-                        score_penalty *= PENALTY_VALUE_DICT[event.get_type()]
+                        if event.get_type() == TrafficEventType.MIN_SPEED_INFRACTION:
+                            # Special infraction that isn't a constant penalty
+                            value = PENALTY_VALUE_DICT[event.get_type()] * (1 - event.get_dict()['percentage'] / 100)
+                        else:
+                            value = PENALTY_VALUE_DICT[event.get_type()]
+                        infraction_value += value
                         set_infraction_message()
 
-                    # Traffic events that substract a varying amount of points
-                    elif event.get_type() in PENALTY_PERC_DICT:
-                        score_penalty = set_score_penalty(score_penalty)
+                    # Outside route lanes, remove points to compensate for the additional route completion points 
+                    elif event.get_type() == TrafficEventType.OUTSIDE_ROUTE_LANES_INFRACTION:
+                        event_percentage = event.get_dict()['percentage']
+                        score_penalty *= (1 - event_percentage / 100)
                         set_infraction_message()
 
                     # Traffic events that stop the simulation
@@ -385,9 +386,8 @@ class StatisticsManager(object):
                         failure_message = "Agent got blocked"
                         set_infraction_message()
 
-                    elif event.get_type() == TrafficEventType.ROUTE_COMPLETION:
-                        score_route = event.get_dict()['route_completed']
-                        target_reached = score_route >= 100
+            # Apply the penalty for the infractions
+            score_penalty *= 1 / (1 + infraction_value)
 
         # Update route scores
         route_record.scores['score_route'] = round(score_route, ROUND_DIGITS_SCORE)

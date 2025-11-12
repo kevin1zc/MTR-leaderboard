@@ -361,6 +361,51 @@ class MTRAgent(AutonomousAgent):
         traj_index = np.argmax(pred_ego['pred_scores'])
         # destination = pred_ego['pred_trajs'][traj_index][5]
 
+        # Visualize predicted trajectory in CARLA (first 5 waypoints)
+        # pred_trajs format: (num_modes, num_timestamps, 2) - only x, y coordinates
+        pred_traj = pred_ego['pred_trajs'][traj_index]  # Shape: (num_timestamps, 2)
+        num_waypoints_to_plot = min(10, len(pred_traj))
+        
+        if num_waypoints_to_plot > 0:
+            # Convert to numpy array if needed for easier indexing
+            pred_traj_array = np.array(pred_traj) if not isinstance(pred_traj, np.ndarray) else pred_traj
+            
+            # Get current vehicle location for z-coordinate reference
+            ego_location = self.player.get_location()
+            base_z = ego_location.z + 0.5  # Slightly above ground
+            
+            # Draw waypoints and connecting lines
+            for i in range(num_waypoints_to_plot):
+                waypoint = pred_traj_array[i + 10]
+                # pred_trajs only has [x, y] coordinates (no z)
+                if len(waypoint) >= 2:
+                    x, y = float(waypoint[0]), float(waypoint[1])
+                    location = carla.Location(x=x, y=y, z=base_z)
+                    
+                    # Draw point at waypoint location (gold color)
+                    self.world.debug.draw_point(
+                        location, 
+                        size=0.1,  # Increased size for better visibility
+                        color=carla.Color(255, 215, 0),  # Gold
+                        life_time=0.2  # Lasts 1 second for better visibility
+                    )
+                    
+                    # Draw line connecting to next waypoint
+                    if i < num_waypoints_to_plot - 1:
+                        next_waypoint = pred_traj_array[i + 1]
+                        if len(next_waypoint) >= 2:
+                            next_x, next_y = float(next_waypoint[0]), float(next_waypoint[1])
+                            next_location = carla.Location(x=next_x, y=next_y, z=base_z)
+                            
+                            # Draw line connecting waypoints (gold color)
+                            self.world.debug.draw_line(
+                                location,
+                                next_location,
+                                thickness=0.1,  # Increased thickness for better visibility
+                                color=carla.Color(255, 215, 0),  # Gold
+                                life_time=0.2  # Lasts 1 second for better visibility
+                            )
+
         dyn_vehic_list = []
         for i in range(1, len(final_pred_dicts)):
             temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])

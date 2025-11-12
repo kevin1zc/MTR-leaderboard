@@ -2,7 +2,7 @@
 
 export TEAM_AGENT=$LEADERBOARD_ROOT/leaderboard/autoagents/mtr_agent.py
 
-export ROUTES=$LEADERBOARD_ROOT/data/routes_devtest.xml
+export ROUTES=$LEADERBOARD_ROOT/data/leaderboard2_scenario.xml
 #export ROUTES_SUBSET=0
 export REPETITIONS=1
 

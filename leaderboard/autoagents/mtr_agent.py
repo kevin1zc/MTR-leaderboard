@@ -10,20 +10,14 @@ import torch
 import carla
 import time
 
-import psutil, gc, tracemalloc
-
 from mtr.config import cfg, cfg_from_yaml_file
 from mtr.models import model as model_utils
 from mtr.utils import common_utils
-
-# from carla_api.utils.world import World
-# from carla_api.utils.carla_utils import HUD
-
-from carla_api.utils.mtr_data_utils import create_scene_level_data, decode_map_features, generate_prediction_dicts
+from carla_api.utils.mtr_data_utils import create_scene_level_data, generate_prediction_dicts
 from carla_api.agents.navigation.behavior_agent import BehaviorAgent
 
 from carla_api.mpc.mpc_solver import MpcController
-from carla_api.mpc.config import N, dt
+from carla_api.mpc.config import N, dt, MIN_TURN_SPEED, DEBUG_PRINTS, DEBUG_VISUALIZATION, DEBUG_TIMING
 
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 
@@ -45,10 +39,12 @@ class MTRAgent(AutonomousAgent):
         self._route_min_distance = 4.0
         self._route = None
         self._route_parsed = False
+        self._dense_route = None  # Store the dense route (green dots, ~1m spacing)
+        self._dense_route_parsed = False
 
         self._simulation_steps = 0
         self.last_control = None
-        self.use_precomputed_waypoints = True
+        self.use_precomputed_waypoints = False
         self.follow_agent = False
 
         mtr_dir = os.path.dirname(common_utils.__file__)
@@ -87,67 +83,69 @@ class MTRAgent(AutonomousAgent):
 
         self.world = CarlaDataProvider.get_world()
         self.player = CarlaDataProvider.get_hero_actor()
+        
+        ego_bbox = self.player.bounding_box.extent
+        self.ego_length = ego_bbox.x * 2.0
+        self.ego_width = ego_bbox.y * 2.0
+        print(f"[AGENT] Ego vehicle dimensions: length={self.ego_length:.2f}m, width={self.ego_width:.2f}m")
 
         self.temp_agent = BehaviorAgent(self.player, behavior='normal', opt_dict={
-            'sampling_resolution': 0.24})  # this may change later for trafic lights etc.
+            'sampling_resolution': 0.24})
 
         self.mpc = MpcController(self.world, self.player, horizon=N, dt=dt)
 
     def setup(self, path_to_conf_file):
-        self.track = Track.SENSORS  # At a minimum, this method sets the Leaderboard modality. In this case, SENSORS
+        self.track = Track.SENSORS
 
     def sensors(self):
-        # Add at least one sensor to get valid evaluation statistics
-        sensors = [
-            # {'type': 'sensor.camera.rgb', 'id': 'Center',
-            #  'x': 0.7, 'y': 0.0, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': 0.0, 'width': 300, 'height': 200,
-            #  'fov': 100},
-            # {'type': 'sensor.lidar.ray_cast', 'id': 'LIDAR',
-            #  'x': 0.7, 'y': -0.4, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -45.0},
-            # {'type': 'sensor.other.radar', 'id': 'RADAR',
-            #  'x': 0.7, 'y': -0.4, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -45.0, 'fov': 30},
-            # {'type': 'sensor.other.gnss', 'id': 'GPS',
-            #  'x': 0.7, 'y': -0.4, 'z': 1.60},
-            # {'type': 'sensor.other.imu', 'id': 'IMU',
-            #  'x': 0.7, 'y': -0.4, 'z': 1.60, 'roll': 0.0, 'pitch': 0.0, 'yaw': -45.0},
-            # {'type': 'sensor.opendrive_map', 'id': 'OpenDRIVE', 'reading_frequency': 1},
-            {'type': 'sensor.speedometer', 'id': 'Speed'},
-        ]
-        return sensors
+        return [{'type': 'sensor.speedometer', 'id': 'Speed'}]
 
+    def set_global_plan(self, global_plan_gps, global_plan_world_coord):
+        from leaderboard.utils.route_manipulation import downsample_route
+        
+        self._dense_route_world_coord = global_plan_world_coord
+        ds_ids = downsample_route(global_plan_world_coord, 200)
+        self._global_plan_world_coord = [(global_plan_world_coord[x][0], global_plan_world_coord[x][1]) for x in ds_ids]
+        self._global_plan = [global_plan_gps[x] for x in ds_ids]
+        
+        print(f"[AGENT] Received dense route: {len(global_plan_world_coord)} waypoints (~1m spacing)")
+        print(f"[AGENT] Created sparse route: {len(self._global_plan_world_coord)} waypoints (~200m spacing)")
+    
     def parse_route(self):
-        self._route = []  # deque()
+        self._route = []
         for pos, cmd in self._global_plan_world_coord:
-            pos = [pos.location.x, pos.location.y]  # np.array([pos.location.x, pos.location.y])
-            self._route.append(pos)  # self._route.append((pos, cmd))
-
+            pos = [pos.location.x, pos.location.y]
+            self._route.append(pos)
         self._route_parsed = True
         self._route = np.array(self._route)
+    
+    def parse_dense_route(self):
+        self._dense_route = []
+        for pos, cmd in self._dense_route_world_coord:
+            pos = [pos.location.x, pos.location.y]
+            self._dense_route.append(pos)
+        self._dense_route_parsed = True
+        self._dense_route = np.array(self._dense_route)
+        print(f"[AGENT] Parsed dense route: {len(self._dense_route)} waypoints")
 
     def parse_carla_data(self, track_ids):
-        info = {}
-        info['scenario_id'] = "scenario_0"
-        info['timestamps_seconds'] = np.linspace(0.0, 9.0, 91)  # list of int of shape (91)
-        info['current_time_index'] = 10  # int, 10
-        info['sdc_track_index'] = 0  # set ego vehicle index to be 0
-        info['objects_of_interest'] = []  # list, could be empty list
-
-        info['tracks_to_predict'] = {
-            'track_index': list(range(len(track_ids))),
-            'difficulty': [0] * len(track_ids)
+        info = {
+            'scenario_id': "scenario_0",
+            'timestamps_seconds': np.linspace(0.0, 9.0, 91),
+            'current_time_index': 10,
+            'sdc_track_index': 0,
+            'objects_of_interest': [],
+            'tracks_to_predict': {
+                'track_index': list(range(len(track_ids))),
+                'difficulty': [0] * len(track_ids),
+                'object_type': ['TYPE_VEHICLE'] * len(track_ids)
+            },
+            'track_infos': self.decode_tracks(track_ids)
         }
-
-        info['tracks_to_predict']['object_type'] = ['TYPE_VEHICLE'] * len(track_ids)
-
-        info['track_infos'] = self.decode_tracks(track_ids)
         return info
 
     def decode_tracks(self, track_ids):
-        track_infos = {
-            'object_id': [],  # {0: unset, 1: vehicle, 2: pedestrian, 3: cyclist, 4: others}
-            'object_type': [],
-            'trajs': []
-        }
+        track_infos = {'object_id': [], 'object_type': [], 'trajs': []}
         for i, object_id in enumerate(track_ids):
             trajs = self._trajectories[object_id]
             full_traj = np.zeros((11, 10))
@@ -156,9 +154,7 @@ class MTRAgent(AutonomousAgent):
             track_infos['object_id'].append(object_id)
             track_infos['object_type'].append('TYPE_VEHICLE')
             track_infos['trajs'].append(full_traj)
-
-        track_infos['trajs'] = np.stack(track_infos['trajs'], axis=0)  # (num_objects, num_timestamp, 9)
-
+        track_infos['trajs'] = np.stack(track_infos['trajs'], axis=0)
         return track_infos
 
     def get_ego_vehicle_state(self):
@@ -170,6 +166,169 @@ class MTRAgent(AutonomousAgent):
                     self.player.get_velocity().y ** 2)
 
         return x, y, yaw, v
+    
+    def _visualize_trajectories(self, final_pred_dicts, prediction_horizon, base_z):
+        if not DEBUG_VISUALIZATION:
+            return
+        
+        colors = [
+            carla.Color(255, 0, 0), carla.Color(255, 165, 0), carla.Color(255, 255, 0),
+            carla.Color(0, 255, 0), carla.Color(0, 0, 255), carla.Color(75, 0, 130),
+            carla.Color(238, 130, 238)
+        ]
+        
+        for i in range(1, len(final_pred_dicts)):
+            temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
+            temp_traj_full = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][:prediction_horizon]
+            color = colors[min(i-1, len(colors)-1)]
+            
+            for j in range(len(temp_traj_full)):
+                traj_point = temp_traj_full[j]
+                traj_location = carla.Location(x=float(traj_point[0]), y=float(traj_point[1]), z=base_z)
+                point_size = 0.12 if j < N else 0.08
+                self.world.debug.draw_point(traj_location, size=point_size, color=color, life_time=0.15)
+                
+                if j < len(temp_traj_full) - 1:
+                    next_traj_point = temp_traj_full[j + 1]
+                    next_location = carla.Location(x=float(next_traj_point[0]), y=float(next_traj_point[1]), z=base_z)
+                    line_thickness = 0.1 if j < N else 0.05
+                    self.world.debug.draw_line(traj_location, next_location, thickness=line_thickness,
+                                              color=color, life_time=0.15)
+    
+    def _visualize_waypoints(self, closest_k_waypoint, x0, y0, yaw0, goal, base_z):
+        if not DEBUG_VISUALIZATION or len(closest_k_waypoint) == 0:
+            return
+        
+        target_wp = closest_k_waypoint[0]
+        target_location = carla.Location(x=float(target_wp[0]), y=float(target_wp[1]), z=base_z + 1.0)
+        self.world.debug.draw_point(target_location, size=0.3, color=carla.Color(255, 0, 255), life_time=0.15)
+        self.world.debug.draw_line(
+            carla.Location(x=x0, y=y0, z=base_z),
+            carla.Location(x=float(target_wp[0]), y=float(target_wp[1]), z=base_z),
+            thickness=0.2, color=carla.Color(255, 0, 255), life_time=0.15
+        )
+        
+        goal_location = carla.Location(x=float(goal[0]), y=float(goal[1]), z=base_z + 1.5)
+        self.world.debug.draw_point(goal_location, size=0.4, color=carla.Color(0, 255, 255), life_time=0.15)
+    
+    def _print_debug_info(self, x0, y0, yaw0, closest_k_waypoint, waypoints_, v0, reference_speed):
+        if not DEBUG_PRINTS:
+            return
+        
+        if len(closest_k_waypoint) > 0:
+            target_wp = closest_k_waypoint[0]
+            target_dist = np.linalg.norm(np.array([target_wp[0], target_wp[1]]) - np.array([x0, y0]))
+            dx = target_wp[0] - x0
+            dy = target_wp[1] - y0
+            target_angle = np.arctan2(dy, dx)
+            angle_diff = np.rad2deg(target_angle - yaw0)
+            
+            while angle_diff > 180:
+                angle_diff -= 360
+            while angle_diff < -180:
+                angle_diff += 360
+            
+            print(f"[DEBUG] Ego pos: ({x0:.2f}, {y0:.2f}), yaw: {np.rad2deg(yaw0):.1f}°")
+            print(f"[DEBUG] Target WP: ({target_wp[0]:.2f}, {target_wp[1]:.2f}), dist: {target_dist:.2f}m")
+            print(f"[DEBUG] Target angle: {np.rad2deg(target_angle):.1f}°, Angle diff: {angle_diff:.1f}°")
+        
+        if waypoints_ and len(waypoints_) >= 3:
+            print(f"[DEBUG MPC WPS] WP[0]: ({waypoints_[0][0]:.2f}, {waypoints_[0][1]:.2f}), "
+                  f"WP[1]: ({waypoints_[1][0]:.2f}, {waypoints_[1][1]:.2f}), "
+                  f"WP[2]: ({waypoints_[2][0]:.2f}, {waypoints_[2][1]:.2f})")
+        
+        print(f"[DEBUG] Current speed: {v0:.2f} m/s, Reference speed: {reference_speed:.2f} m/s")
+    
+    def _select_waypoints_for_mpc(self, current_location, heading, v0, x0, y0):
+        dense_route_new, closest_index_dense = self.choose_ahead_waypoint(
+            waypoints=self._dense_route, pos=current_location, heading=heading)
+        
+        if dense_route_new is False or len(dense_route_new) <= closest_index_dense:
+            return []
+        
+        if v0 < 2.0:
+            look_ahead_waypoints = 2
+        elif v0 < 5.0:
+            look_ahead_waypoints = 3
+        else:
+            look_ahead_waypoints = 4
+        
+        start_index = min(closest_index_dense + look_ahead_waypoints, len(dense_route_new) - 1)
+        max_waypoints_for_mpc = min(50, len(dense_route_new) - start_index)
+        return list(dense_route_new[start_index: start_index + max_waypoints_for_mpc])
+    
+    def _prepare_mpc_waypoints(self, closest_k_waypoint, x0, y0):
+        if len(closest_k_waypoint) == 0:
+            print(f"[AGENT WARNING] No waypoints available, using current position")
+            return [[x0, y0]] * N
+        
+        if len(closest_k_waypoint) >= N:
+            return [[float(closest_k_waypoint[i][0]), float(closest_k_waypoint[i][1])] for i in range(N)]
+        else:
+            waypoints_ = [[float(wp[0]), float(wp[1])] for wp in closest_k_waypoint]
+            last_wp = waypoints_[-1]
+            while len(waypoints_) < N:
+                waypoints_.append(last_wp)
+            return waypoints_
+    
+    def _collect_vehicle_data(self):
+        ego_transform = self.player.get_transform()
+        vehicles = self.world.get_actors().filter('vehicle.*')
+        vehicle_dist = []
+        
+        def dist(loc):
+            return math.sqrt((loc.x - ego_transform.location.x) ** 2 +
+                           (loc.y - ego_transform.location.y) ** 2 +
+                           (loc.z - ego_transform.location.z) ** 2)
+        
+        for vehicle in vehicles:
+            transform = vehicle.get_transform()
+            loc = transform.location
+            yaw = transform.rotation.yaw
+            vel = vehicle.get_velocity()
+            
+            if vehicle.id != self.player.id:
+                vehicle_dist.append((dist(loc), vehicle.id, vehicle))
+            
+            dim = vehicle.bounding_box.extent * 2
+            traj = np.array([loc.x, loc.y, loc.z, dim.x, dim.y, dim.z,
+                           math.radians(yaw), vel.x, vel.y, 1])
+            self._trajectories[vehicle.id].append(traj)
+        
+        vehicle_dist.sort()
+        self._simulation_steps += 1
+        
+        track_ids = [self.player.id]
+        for i in range(min(7, len(vehicle_dist))):
+            track_ids.append(vehicle_dist[i][1])
+        return track_ids
+    
+    def _run_mtr_prediction(self, track_ids):
+        info = self.parse_carla_data(track_ids)
+        info['vehicle_ids'] = track_ids
+        info['map_infos'] = self.map_infos
+        ret_infos = create_scene_level_data(info, cfg.DATA_CONFIG)
+        
+        batch_dict = {
+            'batch_size': 1,
+            'input_dict': ret_infos,
+            'batch_sample_count': [len(info['vehicle_ids'])]
+        }
+        
+        with torch.no_grad():
+            batch_pred_dicts = self.model(batch_dict)
+            final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[0]
+        
+        del batch_pred_dicts, ret_infos, batch_dict
+        return final_pred_dicts
+    
+    def _build_dynamic_vehicle_list(self, final_pred_dicts, prediction_horizon):
+        dyn_vehic_list = []
+        for i in range(1, len(final_pred_dicts)):
+            temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
+            temp_traj_full = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][:prediction_horizon]
+            dyn_vehic_list.append(temp_traj_full[:N])
+        return dyn_vehic_list
 
     def precompute_parking_exit_path(self, carla_map, start_location: carla.Location,
                                      spacing: float = 0.12):
@@ -209,256 +368,151 @@ class MTRAgent(AutonomousAgent):
         except:
             return False, False
 
+    def calculate_reference_speed(self, waypoints, current_speed):
+        from carla_api.mpc.config import MAX_SPEED, MIN_TURN_SPEED
+        
+        if len(waypoints) < 3:
+            return MAX_SPEED
+        
+        look_ahead = min(20, len(waypoints))
+        max_curvature = 0.0
+        
+        for i in range(1, look_ahead - 1):
+            p1 = np.array(waypoints[i-1])
+            p2 = np.array(waypoints[i])
+            p3 = np.array(waypoints[i+1])
+            
+            v1 = p2 - p1
+            v2 = p3 - p2
+            
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 < 0.1 or norm2 < 0.1:
+                continue
+            
+            cos_angle = np.dot(v1, v2) / (norm1 * norm2)
+            cos_angle = np.clip(cos_angle, -1.0, 1.0)
+            angle_change = np.arccos(cos_angle)
+            curvature = angle_change / (norm1 + 0.01)
+            max_curvature = max(max_curvature, curvature)
+        
+        if max_curvature < 0.05:
+            target_speed = MAX_SPEED
+        elif max_curvature > 0.3:
+            target_speed = MIN_TURN_SPEED
+        else:
+            ratio = (max_curvature - 0.05) / (0.3 - 0.05)
+            target_speed = MAX_SPEED - ratio * (MAX_SPEED - MIN_TURN_SPEED)
+        
+        max_speed_change_per_step = 2.0
+        speed_error = target_speed - current_speed
+        
+        if abs(speed_error) <= max_speed_change_per_step:
+            reference_speed = target_speed
+        elif speed_error > 0:
+            reference_speed = current_speed + max_speed_change_per_step
+        else:
+            reference_speed = current_speed - max_speed_change_per_step
+        
+        return max(MIN_TURN_SPEED, min(MAX_SPEED, reference_speed))
+
     @torch.no_grad()
     def run_step(self, input_data, timestamp):
-        """
-            input_data: A dictionary containing sensor data for the requested sensors.
-                        The data has been preprocessed at sensor_interface.py, and will be given as numpy arrays.
-                        This dictionary is indexed by the ids defined in the sensor method.
-            timestamp:  A timestamp of the current simulation instant (in seconds).
-        """
-
-        """
-            Remember that you also have access to the route that the ego agent should travel to achieve its destination. 
-            Use the self._global_plan member to access the geolocation route and self._global_plan_world_coord for 
-            its world location counterpart.
-        """
-
-        """if timestamp < 2:
-            self.last_control = carla.VehicleControl()
-            return carla.VehicleControl()"""
+        t_step_start = time.time()
+        
         if self._simulation_steps % int(0.1 / self._delta_t) == 1:
             self._simulation_steps += 1
             return self.last_control
+        
         start_location = self.player.get_location()
-
         x0, y0, yaw0, v0 = self.get_ego_vehicle_state()
-
         current_location = np.array([x0, y0])
-        current_velocity = v0
 
-        if current_velocity <= 5:
-            multiplier = 1.2
-        elif current_velocity <= 10:
-            multiplier = 3.6
-        elif current_velocity <= 20:
-            multiplier = 6.2
-        elif current_velocity <= 30:
-            multiplier = 8
-        elif current_velocity <= 40:
-            multiplier = 10
-        elif current_velocity <= 50:
-            multiplier = 11
-        elif current_velocity <= 60:
-            multiplier = 12
-        elif current_velocity <= 70:
-            multiplier = 14
-        else:
-            multiplier = 14
-
+        if not self._route_parsed:
+            self.parse_route()
+        if not self._dense_route_parsed:
+            self.parse_dense_route()
+        
         if self.use_precomputed_waypoints and timestamp < 0.1:
             self._route = self.precompute_parking_exit_path(self.world.get_map(), start_location=start_location)
             goal = self._route[1]
             self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
         else:
-            if not self._route_parsed:
-                self.parse_route()
-
-            if len(self._route) == 1:
-                goal = self._route[0]
-            else:
-                # goal_indx = min(20, self._route.shape[0])
-                # goal = self._route[goal_indx-1]
-                goal = self._route[1]
-                # distance = np.linalg.norm(goal - cur_pos)
-                # if distance < self._route_min_distance:
-                #   self._route.popleft()
+            goal = self._route[0] if len(self._route) == 1 else self._route[1]
 
             if self.follow_agent:
-
                 self._route = None
-
                 wp0 = self.world.get_map().get_waypoint(start_location)
                 wpt = self.world.get_map().get_waypoint(carla.Location(goal[0], goal[1], 0))
-
                 self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
                 trace = self.temp_agent.trace_route(wp0, wpt)
                 self._route = []
                 for wp in trace:
-                    self._route.append([wp[0].transform.location.x,
-                                        wp[0].transform.location.y])
+                    self._route.append([wp[0].transform.location.x, wp[0].transform.location.y])
                 self._route = np.array(self._route)
-
-                # multiplier = multiplier * 2
-
                 self.follow_agent = False
 
         ego_transform = self.player.get_transform()
         fwd = ego_transform.get_forward_vector()
         heading = np.array([fwd.x, fwd.y])
 
-        route_new, closest_index = self.choose_ahead_waypoint(waypoints=self._route, pos=current_location,
-                                                              heading=heading)
-
-        self._route = route_new
-
+        route_new, _ = self.choose_ahead_waypoint(waypoints=self._route, pos=current_location, heading=heading)
         if route_new is not False:
-            termi = int(N * multiplier)
-            closest_k_waypoint = list(route_new[closest_index + 1: closest_index + 1 + termi])
-        else:
-            closest_k_waypoint = list(route_new[-1])
+            self._route = route_new
 
-        del route_new
-
-        def dist(l):
-            return math.sqrt((l.x - ego_transform.location.x) ** 2 + (l.y - ego_transform.location.y)
-                             ** 2 + (l.z - ego_transform.location.z) ** 2)
-
-        vehicles = self.world.get_actors().filter('vehicle.*')
-
-        vehicle_dist = []
-
-        for vehicle in vehicles:
-            transform = vehicle.get_transform()
-            loc = transform.location
-            yaw = transform.rotation.yaw
-            vel = vehicle.get_velocity()
-            if vehicle.id != self.player.id:
-                vehicle_dist.append((dist(loc), vehicle.id, vehicle))
-            dim = vehicle.bounding_box.extent * 2
-            traj = np.array([loc.x, loc.y, loc.z, dim.x, dim.y, dim.z, math.radians(yaw), vel.x, vel.y, 1])
-            self._trajectories[vehicle.id].append(traj)
-            self._simulation_steps = 0
-
-        vehicle_dist.sort()
-
-        track_ids = [self.player.id]
-        for i in range(min(7, len(vehicle_dist))):  # find the 7 closest vehicles
-            track_ids.append(vehicle_dist[i][1])
-
-        self._simulation_steps += 1
-        info = self.parse_carla_data(track_ids)
-        info['vehicle_ids'] = track_ids
-
-        info['map_infos'] = self.map_infos
-        # info['dynamic_map_infos'] = self.dynamic_map_infos
-        ret_infos = create_scene_level_data(info, cfg.DATA_CONFIG)
-
-        batch_dict = {
-            'batch_size': 1,
-            'input_dict': ret_infos,
-            'batch_sample_count': [len(info['vehicle_ids'])]
-        }
-        with torch.no_grad():
-            batch_pred_dicts = self.model(batch_dict)
-            final_pred_dicts = generate_prediction_dicts(batch_pred_dicts)[0]
-            # print("final_pred_dicts: ", final_pred_dicts)
-            # print("generate_prediction_dicts(batch_pred_dicts): ", generate_prediction_dicts(batch_pred_dicts))
-
-        del batch_pred_dicts, ret_infos, batch_dict
+        closest_k_waypoint = self._select_waypoints_for_mpc(current_location, heading, v0, x0, y0)
+        track_ids = self._collect_vehicle_data()
+        
+        t_mtr_start = time.time()
+        final_pred_dicts = self._run_mtr_prediction(track_ids)
+        t_mtr = time.time() - t_mtr_start
 
         pred_ego = final_pred_dicts[0]
         traj_index = np.argmax(pred_ego['pred_scores'])
-        # destination = pred_ego['pred_trajs'][traj_index][5]
-
-        # Visualize predicted trajectory in CARLA (first 5 waypoints)
-        # pred_trajs format: (num_modes, num_timestamps, 2) - only x, y coordinates
-        pred_traj = pred_ego['pred_trajs'][traj_index]  # Shape: (num_timestamps, 2)
-        num_waypoints_to_plot = min(10, len(pred_traj))
+        ego_location = self.player.get_location()
+        base_z = ego_location.z + 0.5
         
-        if num_waypoints_to_plot > 0:
-            # Convert to numpy array if needed for easier indexing
-            pred_traj_array = np.array(pred_traj) if not isinstance(pred_traj, np.ndarray) else pred_traj
-            
-            # Get current vehicle location for z-coordinate reference
-            ego_location = self.player.get_location()
-            base_z = ego_location.z + 0.5  # Slightly above ground
-            
-            # Draw waypoints and connecting lines
-            for i in range(num_waypoints_to_plot):
-                waypoint = pred_traj_array[i + 10]
-                # pred_trajs only has [x, y] coordinates (no z)
-                if len(waypoint) >= 2:
-                    x, y = float(waypoint[0]), float(waypoint[1])
-                    location = carla.Location(x=x, y=y, z=base_z)
-                    
-                    # Draw point at waypoint location (gold color)
-                    self.world.debug.draw_point(
-                        location, 
-                        size=0.1,  # Increased size for better visibility
-                        color=carla.Color(255, 215, 0),  # Gold
-                        life_time=0.2  # Lasts 1 second for better visibility
-                    )
-                    
-                    # Draw line connecting to next waypoint
-                    if i < num_waypoints_to_plot - 1:
-                        next_waypoint = pred_traj_array[i + 1]
-                        if len(next_waypoint) >= 2:
-                            next_x, next_y = float(next_waypoint[0]), float(next_waypoint[1])
-                            next_location = carla.Location(x=next_x, y=next_y, z=base_z)
-                            
-                            # Draw line connecting waypoints (gold color)
-                            self.world.debug.draw_line(
-                                location,
-                                next_location,
-                                thickness=0.1,  # Increased thickness for better visibility
-                                color=carla.Color(255, 215, 0),  # Gold
-                                life_time=0.2  # Lasts 1 second for better visibility
-                            )
+        prediction_horizon = min(30, final_pred_dicts[1]['pred_trajs'].shape[1]) if len(final_pred_dicts) > 1 else 30
+        dyn_vehic_list = self._build_dynamic_vehicle_list(final_pred_dicts, prediction_horizon)
+        self._visualize_trajectories(final_pred_dicts, prediction_horizon, base_z)
 
-        dyn_vehic_list = []
-        for i in range(1, len(final_pred_dicts)):
-            temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
-            temp_traj = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][: 10]
-            dyn_vehic_list.append(temp_traj)
-
-        x0, y0, yaw0, v0 = self.get_ego_vehicle_state()
-
-        temp_list = []
-
-        if isinstance(closest_k_waypoint[-1], np.float64):
-            temp_list.append(closest_k_waypoint)
-            waypoints_ = temp_list * 10
-        else:
-            waypoints_ = closest_k_waypoint if len(closest_k_waypoint) >= 10 else closest_k_waypoint + \
-                                                                                  [closest_k_waypoint[-1]] * (10 - len(
-                closest_k_waypoint))
-
+        waypoints_ = self._prepare_mpc_waypoints(closest_k_waypoint, x0, y0)
+        self._visualize_waypoints(closest_k_waypoint, x0, y0, yaw0, goal, base_z)
+        
+        t_mpc_reset_start = time.time()
         self.mpc.reset_solver(x0, y0, yaw0, v0,
-                              self.mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][: N])), \
-                              self.mpc.get_static_obstacles_soft(np.array(pred_ego['pred_trajs'][traj_index][: N])),
+                              self.mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][:N])),
+                              self.mpc.get_static_obstacles_soft(np.array(pred_ego['pred_trajs'][traj_index][:N])),
                               waypoints_)
+        t_mpc_reset = time.time() - t_mpc_reset_start
 
-        waypoints_ = None
-
-        self.mpc.update_cost_function(goal, dyn_vehic_list)
+        reference_speed = self.calculate_reference_speed(closest_k_waypoint, v0)
+        self._print_debug_info(x0, y0, yaw0, closest_k_waypoint, waypoints_, v0, reference_speed)
+        
+        t_mpc_update_start = time.time()
+        self.mpc.update_cost_function(goal, dyn_vehic_list, reference_speed)
+        t_mpc_update = time.time() - t_mpc_update_start
+        
+        t_mpc_solve_start = time.time()
         self.mpc.solve()
+        t_mpc_solve = time.time() - t_mpc_solve_start
 
         if self.mpc.is_success:
-            print("is_success : True")
             wheel_angle, acceleration = self.mpc.get_controls_value()
             throttle, brake, steer = self.mpc.process_control_inputs(wheel_angle, acceleration)
             control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
-
+            if DEBUG_PRINTS:
+                print(f"[MPC SUCCESS] Steer: {steer:.3f} ({np.rad2deg(wheel_angle):.1f}°), Throttle: {throttle:.3f}, Brake: {brake:.3f}")
         else:
-            print("is_success : False")
+            print("[AGENT] ✗✗✗ MPC FAILED - Falling back to BehaviorAgent")
             self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
             control = self.temp_agent.run_step()
             control.manual_gear_shift = False
 
         self.last_control = control
-
-        """
-        input_data: A dictionary containing sensor data for the requested sensors.
-                    The data has been preprocessed at sensor_interface.py, and will be given as numpy arrays.
-                    This dictionary is indexed by the ids defined in the sensor method.
-        timestamp:  A timestamp of the current simulation instant.
-        """
-
-        """
-        Remember that you also have access to the route that the ego agent should travel to achieve its destination. 
-        Use the self._global_plan member to access the geolocation route and self._global_plan_world_coord for 
-        its world location counterpart.
-        """
+        
+        if DEBUG_TIMING:
+            t_step_total = time.time() - t_step_start
+            print(f"\n[TIMING] run_step: {t_step_total*1000:.1f}ms | MTR: {t_mtr*1000:.1f}ms | MPC reset: {t_mpc_reset*1000:.1f}ms | MPC update: {t_mpc_update*1000:.1f}ms | MPC solve: {t_mpc_solve*1000:.1f}ms\n")
 
         return control

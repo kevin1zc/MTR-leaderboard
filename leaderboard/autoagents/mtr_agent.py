@@ -171,12 +171,37 @@ class MTRAgent(AutonomousAgent):
         if not DEBUG_VISUALIZATION:
             return
         
+        # Ego vehicle color (bright cyan/light blue)
+        ego_color = carla.Color(0, 255, 255)
+        
+        # Other vehicle colors
         colors = [
             carla.Color(255, 0, 0), carla.Color(255, 165, 0), carla.Color(255, 255, 0),
             carla.Color(0, 255, 0), carla.Color(0, 0, 255), carla.Color(75, 0, 130),
             carla.Color(238, 130, 238)
         ]
         
+        # Visualize ego vehicle trajectory (index 0)
+        if len(final_pred_dicts) > 0:
+            ego_vehic_index = np.argmax(final_pred_dicts[0]['pred_scores'])
+            ego_traj_full = final_pred_dicts[0]['pred_trajs'][ego_vehic_index][:prediction_horizon]
+            
+            for j in range(len(ego_traj_full)):
+                traj_point = ego_traj_full[j]
+                traj_location = carla.Location(x=float(traj_point[0]), y=float(traj_point[1]), z=base_z + 0.2)
+                # Larger points for ego vehicle to make it more visible
+                point_size = 0.15 if j < N else 0.10
+                self.world.debug.draw_point(traj_location, size=point_size, color=ego_color, life_time=0.15)
+                
+                if j < len(ego_traj_full) - 1:
+                    next_traj_point = ego_traj_full[j + 1]
+                    next_location = carla.Location(x=float(next_traj_point[0]), y=float(next_traj_point[1]), z=base_z + 0.2)
+                    # Thicker lines for ego vehicle
+                    line_thickness = 0.15 if j < N else 0.08
+                    self.world.debug.draw_line(traj_location, next_location, thickness=line_thickness,
+                                              color=ego_color, life_time=0.15)
+        
+        # Visualize other vehicles' trajectories (starting from index 1)
         for i in range(1, len(final_pred_dicts)):
             temp_vehic_index = np.argmax(final_pred_dicts[i]['pred_scores'])
             temp_traj_full = final_pred_dicts[i]['pred_trajs'][temp_vehic_index][:prediction_horizon]
@@ -368,6 +393,239 @@ class MTRAgent(AutonomousAgent):
         except:
             return False, False
 
+    def _check_oriented_bbox_collision(self, pos1, yaw1, length1, width1, pos2, yaw2, length2, width2, min_safety_distance):
+        """
+        Check if two oriented bounding boxes collide.
+        Uses Separating Axis Theorem (SAT) for accurate collision detection.
+        
+        Args:
+            pos1, pos2: Center positions of vehicles [x, y]
+            yaw1, yaw2: Vehicle headings in radians
+            length1, width1: Dimensions of vehicle 1
+            length2, width2: Dimensions of vehicle 2
+            min_safety_distance: Minimum safety distance between vehicles
+        
+        Returns:
+            True if collision detected, False otherwise
+        """
+        # Calculate half-dimensions
+        half_len1, half_wid1 = length1 / 2.0, width1 / 2.0
+        half_len2, half_wid2 = length2 / 2.0, width2 / 2.0
+        
+        # Get rotation matrices
+        cos1, sin1 = np.cos(yaw1), np.sin(yaw1)
+        cos2, sin2 = np.cos(yaw2), np.sin(yaw2)
+        
+        # Get vehicle corners in local coordinates
+        corners1_local = np.array([
+            [-half_len1, -half_wid1],
+            [half_len1, -half_wid1],
+            [half_len1, half_wid1],
+            [-half_len1, half_wid1]
+        ])
+        corners2_local = np.array([
+            [-half_len2, -half_wid2],
+            [half_len2, -half_wid2],
+            [half_len2, half_wid2],
+            [-half_len2, half_wid2]
+        ])
+        
+        # Rotate and translate corners to world coordinates
+        rot1 = np.array([[cos1, -sin1], [sin1, cos1]])
+        rot2 = np.array([[cos2, -sin2], [sin2, cos2]])
+        corners1 = corners1_local @ rot1.T + pos1
+        corners2 = corners2_local @ rot2.T + pos2
+        
+        # Get perpendicular axes for SAT (normal vectors to edges)
+        # For each box, we need axes perpendicular to two adjacent edges
+        axes = []
+        
+        # Axes from box 1 (perpendicular to its edges)
+        edge1_1 = corners1[1] - corners1[0]  # First edge
+        edge1_2 = corners1[2] - corners1[1]  # Second edge
+        if np.linalg.norm(edge1_1) > 1e-6:
+            # Perpendicular axis (rotate 90 degrees)
+            axis1 = np.array([-edge1_1[1], edge1_1[0]]) / np.linalg.norm(edge1_1)
+            axes.append(axis1)
+        if np.linalg.norm(edge1_2) > 1e-6:
+            axis2 = np.array([-edge1_2[1], edge1_2[0]]) / np.linalg.norm(edge1_2)
+            axes.append(axis2)
+        
+        # Axes from box 2 (perpendicular to its edges)
+        edge2_1 = corners2[1] - corners2[0]
+        edge2_2 = corners2[2] - corners2[1]
+        if np.linalg.norm(edge2_1) > 1e-6:
+            axis3 = np.array([-edge2_1[1], edge2_1[0]]) / np.linalg.norm(edge2_1)
+            axes.append(axis3)
+        if np.linalg.norm(edge2_2) > 1e-6:
+            axis4 = np.array([-edge2_2[1], edge2_2[0]]) / np.linalg.norm(edge2_2)
+            axes.append(axis4)
+        
+        # Project both boxes onto each axis and check for overlap
+        for axis in axes:
+            # Project corners of box 1
+            proj1 = corners1 @ axis
+            min1, max1 = np.min(proj1), np.max(proj1)
+            
+            # Project corners of box 2
+            proj2 = corners2 @ axis
+            min2, max2 = np.min(proj2), np.max(proj2)
+            
+            # Check for separation (with safety distance)
+            if max1 + min_safety_distance < min2 or max2 + min_safety_distance < min1:
+                return False  # Separated on this axis, no collision
+        
+        return True  # No separation found, collision detected
+
+    def _check_collision_avoidance(self, final_pred_dicts, track_ids, x0, y0, yaw0, current_speed):
+        """
+        Check for potential collisions in the next 2 seconds (20 prediction steps).
+        Uses MTR predicted trajectories for both ego and other vehicles.
+        Uses oriented bounding box collision detection with minimum safety distance.
+        Returns a safe speed (can be 0) if collision is detected.
+        
+        Args:
+            final_pred_dicts: MTR prediction results for all vehicles (ego is first)
+            track_ids: List of vehicle IDs (ego is first)
+            x0, y0: Current ego vehicle position
+            yaw0: Current ego vehicle heading (radians)
+            current_speed: Current ego vehicle speed (m/s)
+        
+        Returns:
+            safe_speed: Safe speed to avoid collision (0 if immediate collision risk)
+        """
+        from carla_api.mpc.config import dt
+        
+        # Check next 2 seconds = 20 steps (dt = 0.1s)
+        collision_check_horizon = 20
+        
+        # Minimum safety distance between vehicle bounding boxes (meters)
+        min_safety_distance = 3.0  # Increased for more conservative collision avoidance
+        
+        # Get ego vehicle dimensions
+        ego_length = self.ego_length
+        ego_width = self.ego_width
+        
+        # Get ego vehicle's MTR predicted trajectory (first 2 seconds)
+        pred_ego = final_pred_dicts[0]
+        ego_traj_index = np.argmax(pred_ego['pred_scores'])
+        ego_pred_traj_full = pred_ego['pred_trajs'][ego_traj_index]  # Full predicted trajectory
+        ego_pred_traj = ego_pred_traj_full[:collision_check_horizon]  # First 2 seconds
+        
+        # Estimate ego's heading from predicted trajectory points
+        ego_pred_yaw = np.zeros(collision_check_horizon)
+        for t in range(collision_check_horizon):
+            if t == 0:
+                # Use current heading for first step
+                ego_pred_yaw[t] = yaw0
+            elif t < len(ego_pred_traj):
+                # Estimate heading from direction between consecutive points
+                dx = ego_pred_traj[t, 0] - ego_pred_traj[t-1, 0]
+                dy = ego_pred_traj[t, 1] - ego_pred_traj[t-1, 1]
+                if np.sqrt(dx**2 + dy**2) > 0.01:  # Avoid division by zero
+                    ego_pred_yaw[t] = np.arctan2(dy, dx)
+                else:
+                    ego_pred_yaw[t] = ego_pred_yaw[t-1]  # Keep previous heading
+            else:
+                ego_pred_yaw[t] = ego_pred_yaw[t-1]
+        
+        # Check collision with each nearby vehicle
+        min_safe_speed = current_speed
+        collision_detected = False
+        
+        for i in range(1, len(final_pred_dicts)):
+            if i >= len(track_ids):
+                continue
+                
+            vehicle_id = track_ids[i]
+            
+            # Get vehicle's best predicted trajectory
+            vehicle_pred = final_pred_dicts[i]
+            vehicle_traj_index = np.argmax(vehicle_pred['pred_scores'])
+            vehicle_pred_traj = vehicle_pred['pred_trajs'][vehicle_traj_index][:collision_check_horizon]  # Shape: [20, 2]
+            
+            # Get vehicle dimensions and current heading from stored trajectory
+            if vehicle_id in self._trajectories and len(self._trajectories[vehicle_id]) > 0:
+                # Trajectory format: [x, y, z, dim.x, dim.y, dim.z, yaw, vel.x, vel.y, 1]
+                latest_traj = self._trajectories[vehicle_id][-1]
+                vehicle_length = latest_traj[3]  # dim.x
+                vehicle_width = latest_traj[4]   # dim.y
+                vehicle_current_yaw = latest_traj[6]  # yaw
+            else:
+                # Default vehicle dimensions if not available
+                vehicle_length = 4.5
+                vehicle_width = 2.0
+                vehicle_current_yaw = 0.0
+            
+            # Estimate vehicle headings from trajectory points
+            vehicle_pred_yaw = np.zeros(collision_check_horizon)
+            for t in range(collision_check_horizon):
+                if t == 0:
+                    # Use current heading for first step
+                    vehicle_pred_yaw[t] = vehicle_current_yaw
+                elif t < len(vehicle_pred_traj):
+                    # Estimate heading from direction between consecutive points
+                    dx = vehicle_pred_traj[t, 0] - vehicle_pred_traj[t-1, 0]
+                    dy = vehicle_pred_traj[t, 1] - vehicle_pred_traj[t-1, 1]
+                    if np.sqrt(dx**2 + dy**2) > 0.01:  # Avoid division by zero
+                        vehicle_pred_yaw[t] = np.arctan2(dy, dx)
+                    else:
+                        vehicle_pred_yaw[t] = vehicle_pred_yaw[t-1]  # Keep previous heading
+                else:
+                    vehicle_pred_yaw[t] = vehicle_pred_yaw[t-1]
+            
+            # Check for collision at each time step
+            for t in range(collision_check_horizon):
+                if t >= len(ego_pred_traj) or t >= len(vehicle_pred_traj):
+                    break
+                
+                ego_pos = ego_pred_traj[t]
+                ego_yaw = ego_pred_yaw[t]
+                vehicle_pos = vehicle_pred_traj[t]
+                vehicle_yaw = vehicle_pred_yaw[t]
+                
+                # Check oriented bounding box collision
+                if self._check_oriented_bbox_collision(
+                    ego_pos, ego_yaw, ego_length, ego_width,
+                    vehicle_pos, vehicle_yaw, vehicle_length, vehicle_width,
+                    min_safety_distance
+                ):
+                    collision_detected = True
+                    
+                    # Calculate time to collision
+                    # ego_pred_traj[t] represents position at time (t+1)*dt from now
+                    time_to_collision = (t + 1) * dt
+                    
+                    # If collision is very soon (within 1.0 second), stop completely
+                    if time_to_collision < 1.0:
+                        return 0.0
+                    
+                    # Otherwise, calculate a safe speed based on time to collision
+                    # Use a more aggressive (quadratic) speed reduction curve
+                    # The closer the collision, the slower we should go
+                    # Formula: speed ratio uses quadratic curve from 0 (at 1.0s) to 1.0 (at 2.0s)
+                    # This makes speed reduction more aggressive
+                    time_remaining = time_to_collision - 1.0  # Time remaining after 1.0s threshold
+                    time_window = 1.0  # Window from 1.0s to 2.0s
+                    
+                    # Quadratic curve: ratio = (time_remaining / time_window)^2
+                    # This makes early detection result in much slower speeds
+                    safe_speed_ratio = max(0.0, min(1.0, (time_remaining / time_window) ** 2))
+                    
+                    # Additional safety: if collision is within 1.5 seconds, reduce speed more aggressively
+                    if time_to_collision < 1.5:
+                        safe_speed_ratio *= 0.5  # Further reduce speed by 50%
+                    
+                    safe_speed = current_speed * safe_speed_ratio
+                    min_safe_speed = min(min_safe_speed, safe_speed)
+        
+        # If collision detected, return the minimum safe speed
+        if collision_detected:
+            return max(0.0, min_safe_speed)
+        
+        # No collision detected, return current speed (no change needed)
+        return current_speed
+
     def calculate_reference_speed(self, waypoints, current_speed):
         from carla_api.mpc.config import MAX_SPEED, MIN_TURN_SPEED
         
@@ -479,6 +737,10 @@ class MTRAgent(AutonomousAgent):
         waypoints_ = self._prepare_mpc_waypoints(closest_k_waypoint, x0, y0)
         self._visualize_waypoints(closest_k_waypoint, x0, y0, yaw0, goal, base_z)
         
+        # Check for collision avoidance
+        # Use MTR predicted trajectories for both ego and other vehicles (first 2 seconds)
+        collision_safe_speed = self._check_collision_avoidance(final_pred_dicts, track_ids, x0, y0, yaw0, v0)
+        
         t_mpc_reset_start = time.time()
         self.mpc.reset_solver(x0, y0, yaw0, v0,
                               self.mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][:N])),
@@ -486,7 +748,10 @@ class MTRAgent(AutonomousAgent):
                               waypoints_)
         t_mpc_reset = time.time() - t_mpc_reset_start
 
+        # Calculate reference speed based on waypoints, then apply collision avoidance
         reference_speed = self.calculate_reference_speed(closest_k_waypoint, v0)
+        # Apply collision avoidance: use the minimum of reference speed and collision-safe speed
+        reference_speed = min(reference_speed, collision_safe_speed)
         self._print_debug_info(x0, y0, yaw0, closest_k_waypoint, waypoints_, v0, reference_speed)
         
         t_mpc_update_start = time.time()

@@ -46,6 +46,7 @@ class MTRAgent(AutonomousAgent):
         self.last_control = None
         self.use_precomputed_waypoints = False
         self.follow_agent = False
+        self.mpc_failure_count = 0  # Track consecutive MPC failures
 
         mtr_dir = os.path.dirname(common_utils.__file__)
 
@@ -282,19 +283,76 @@ class MTRAgent(AutonomousAgent):
         max_waypoints_for_mpc = min(50, len(dense_route_new) - start_index)
         return list(dense_route_new[start_index: start_index + max_waypoints_for_mpc])
     
-    def _prepare_mpc_waypoints(self, closest_k_waypoint, x0, y0):
+    def _prepare_mpc_waypoints(self, closest_k_waypoint, x0, y0, yaw0=None):
         if len(closest_k_waypoint) == 0:
             print(f"[AGENT WARNING] No waypoints available, using current position")
             return [[x0, y0]] * N
         
-        if len(closest_k_waypoint) >= N:
-            return [[float(closest_k_waypoint[i][0]), float(closest_k_waypoint[i][1])] for i in range(N)]
-        else:
-            waypoints_ = [[float(wp[0]), float(wp[1])] for wp in closest_k_waypoint]
-            last_wp = waypoints_[-1]
+        waypoints_ = []
+        current_pos = np.array([x0, y0])
+        current_heading = np.array([np.cos(yaw0), np.sin(yaw0)]) if yaw0 is not None else None
+        
+        for i, wp in enumerate(closest_k_waypoint[:N]):
+            wp_pos = np.array([float(wp[0]), float(wp[1])])
+            
+            # Check if waypoint requires a sharp turn from current heading
+            if current_heading is not None and i == 0:
+                # Calculate direction to first waypoint from current position
+                direction = wp_pos - current_pos
+                if np.linalg.norm(direction) > 0.1:  # Avoid division by zero
+                    direction_norm = direction / np.linalg.norm(direction)
+                    # Calculate angle between current heading and waypoint direction
+                    cos_angle = np.clip(np.dot(direction_norm, current_heading), -1.0, 1.0)
+                    angle_change = np.arccos(cos_angle)
+                    
+                    # If waypoint requires sharp turn (> 30°), smooth it out
+                    if np.rad2deg(angle_change) > 30.0:
+                        if DEBUG_PRINTS:
+                            print(f"[AGENT WARNING] First waypoint requires sharp turn ({np.rad2deg(angle_change):.1f}°), smoothing")
+                        # Project waypoint direction onto current heading to smooth the turn
+                        # Use a weighted combination: mostly current heading, some waypoint direction
+                        weight_current = 0.7  # Prefer current heading
+                        weight_waypoint = 0.3
+                        smoothed_direction = (weight_current * current_heading + 
+                                             weight_waypoint * direction_norm)
+                        smoothed_direction = smoothed_direction / np.linalg.norm(smoothed_direction)
+                        # Use distance to waypoint but in smoothed direction
+                        distance = np.linalg.norm(direction)
+                        wp_pos = current_pos + smoothed_direction * distance
+            
+            # Check for sharp turns between consecutive waypoints
+            if i > 0 and len(waypoints_) > 0:
+                prev_wp_pos = np.array(waypoints_[-1])
+                direction = wp_pos - prev_wp_pos
+                if np.linalg.norm(direction) > 0.1:
+                    direction_norm = direction / np.linalg.norm(direction)
+                    prev_direction = prev_wp_pos - (np.array(waypoints_[-2]) if len(waypoints_) > 1 else current_pos)
+                    if np.linalg.norm(prev_direction) > 0.1:
+                        prev_direction_norm = prev_direction / np.linalg.norm(prev_direction)
+                        cos_angle = np.clip(np.dot(direction_norm, prev_direction_norm), -1.0, 1.0)
+                        angle_change = np.arccos(cos_angle)
+                        
+                        # If waypoint requires sharp turn (> 30°), smooth it
+                        if np.rad2deg(angle_change) > 30.0:
+                            if DEBUG_PRINTS:
+                                print(f"[AGENT WARNING] Waypoint {i} requires sharp turn ({np.rad2deg(angle_change):.1f}°), smoothing")
+                            # Smooth the direction
+                            weight_prev = 0.7
+                            weight_new = 0.3
+                            smoothed_direction = (weight_prev * prev_direction_norm + weight_new * direction_norm)
+                            smoothed_direction = smoothed_direction / np.linalg.norm(smoothed_direction)
+                            distance = np.linalg.norm(direction)
+                            wp_pos = prev_wp_pos + smoothed_direction * distance
+            
+            waypoints_.append([float(wp_pos[0]), float(wp_pos[1])])
+        
+        # Fill remaining waypoints if needed
+        if len(waypoints_) < N:
+            last_wp = waypoints_[-1] if waypoints_ else [x0, y0]
             while len(waypoints_) < N:
                 waypoints_.append(last_wp)
-            return waypoints_
+        
+        return waypoints_
     
     def _collect_vehicle_data(self):
         ego_transform = self.player.get_transform()
@@ -479,8 +537,9 @@ class MTRAgent(AutonomousAgent):
 
     def _check_collision_avoidance(self, final_pred_dicts, track_ids, x0, y0, yaw0, current_speed):
         """
-        Check for potential collisions in the next 2 seconds (20 prediction steps).
+        Check for potential collisions in the next 1 second (10 prediction steps).
         Uses MTR predicted trajectories for both ego and other vehicles.
+        MTR predictions are reliable within 1 second, beyond that they become less accurate.
         Uses oriented bounding box collision detection with minimum safety distance.
         Returns a safe speed (can be 0) if collision is detected.
         
@@ -496,11 +555,22 @@ class MTRAgent(AutonomousAgent):
         """
         from carla_api.mpc.config import dt
         
-        # Check next 2 seconds = 20 steps (dt = 0.1s)
-        collision_check_horizon = 20
+        # Don't apply collision avoidance if vehicle is already moving very slowly
+        # This prevents getting stuck in a bad state where collision avoidance keeps slowing down
+        # an already slow vehicle, causing erratic behavior
+        if current_speed < 0.5:
+            if DEBUG_PRINTS:
+                print(f"[COLLISION DEBUG] Skipping collision check - vehicle speed too low ({current_speed:.2f} m/s)")
+            return current_speed
+        
+        # Check next 1 second = 10 steps (dt = 0.1s)
+        # MTR predictions are reliable within 1 second, beyond that accuracy degrades
+        collision_check_horizon = 10
         
         # Minimum safety distance between vehicle bounding boxes (meters)
-        min_safety_distance = 3.0  # Increased for more conservative collision avoidance
+        # Reduced from 3.0m to 2.0m to reduce false positives
+        # This still provides safe clearance while avoiding unnecessary slowdowns
+        min_safety_distance = 2.0
         
         # Get ego vehicle dimensions
         ego_length = self.ego_length
@@ -574,6 +644,14 @@ class MTRAgent(AutonomousAgent):
                 else:
                     vehicle_pred_yaw[t] = vehicle_pred_yaw[t-1]
             
+            # Quick pre-filter: Check current distance to vehicle
+            # Only check vehicles that are reasonably close (within 50m)
+            current_vehicle_pos = vehicle_pred_traj[0] if len(vehicle_pred_traj) > 0 else None
+            if current_vehicle_pos is not None:
+                current_distance = np.linalg.norm(np.array([x0, y0]) - current_vehicle_pos)
+                if current_distance > 50.0:  # Skip vehicles more than 50m away
+                    continue
+            
             # Check for collision at each time step
             for t in range(collision_check_horizon):
                 if t >= len(ego_pred_traj) or t >= len(vehicle_pred_traj):
@@ -584,7 +662,31 @@ class MTRAgent(AutonomousAgent):
                 vehicle_pos = vehicle_pred_traj[t]
                 vehicle_yaw = vehicle_pred_yaw[t]
                 
-                # Check oriented bounding box collision
+                # Quick distance check - skip if vehicles are far apart
+                distance = np.linalg.norm(ego_pos - vehicle_pos)
+                if distance > 30.0:  # Skip if more than 30m apart at this time step
+                    continue
+                
+                # Check if vehicle is actually in front (longitudinal check)
+                # Calculate relative position in ego's coordinate frame
+                ego_heading_vec = np.array([np.cos(ego_yaw), np.sin(ego_yaw)])
+                rel_pos = vehicle_pos - ego_pos
+                longitudinal_dist = np.dot(rel_pos, ego_heading_vec)
+                
+                # Calculate lateral distance (perpendicular to ego heading)
+                lateral_dist = abs(np.dot(rel_pos, np.array([-ego_heading_vec[1], ego_heading_vec[0]])))
+                
+                # Only care about vehicles that are in front or very close laterally
+                # If vehicle is more than 20m behind, skip it
+                if longitudinal_dist < -20.0:
+                    continue
+                
+                # If vehicle is far laterally (more than 5m), it's likely in a different lane
+                # Only check if it's also close longitudinally (within 15m)
+                if lateral_dist > 5.0 and longitudinal_dist > 15.0:
+                    continue
+                
+                # Check oriented bounding box collision only if vehicles are reasonably close
                 if self._check_oriented_bbox_collision(
                     ego_pos, ego_yaw, ego_length, ego_width,
                     vehicle_pos, vehicle_yaw, vehicle_length, vehicle_width,
@@ -596,34 +698,52 @@ class MTRAgent(AutonomousAgent):
                     # ego_pred_traj[t] represents position at time (t+1)*dt from now
                     time_to_collision = (t + 1) * dt
                     
-                    # If collision is very soon (within 1.0 second), stop completely
-                    if time_to_collision < 1.0:
-                        return 0.0
+                    # Debug: Print collision detection info
+                    if DEBUG_PRINTS:
+                        distance = np.linalg.norm(ego_pos - vehicle_pos)
+                        print(f"[COLLISION DEBUG] Detected collision with vehicle {vehicle_id} at t={t}, "
+                              f"time_to_collision={time_to_collision:.2f}s, distance={distance:.2f}m, "
+                              f"ego_pos=({ego_pos[0]:.2f}, {ego_pos[1]:.2f}), "
+                              f"vehicle_pos=({vehicle_pos[0]:.2f}, {vehicle_pos[1]:.2f})")
+                    
+                    # Since we only check 1 second ahead, all collisions detected are imminent
+                    # Use aggressive speed reduction based on time to collision
+                    # If collision is very soon (within 0.5 second), return minimum feasible speed
+                    if time_to_collision < 0.5:
+                        return 0.5  # Minimum speed to keep MPC feasible while allowing maximum braking
                     
                     # Otherwise, calculate a safe speed based on time to collision
                     # Use a more aggressive (quadratic) speed reduction curve
                     # The closer the collision, the slower we should go
-                    # Formula: speed ratio uses quadratic curve from 0 (at 1.0s) to 1.0 (at 2.0s)
-                    # This makes speed reduction more aggressive
-                    time_remaining = time_to_collision - 1.0  # Time remaining after 1.0s threshold
-                    time_window = 1.0  # Window from 1.0s to 2.0s
+                    # Formula: speed ratio uses quadratic curve from 0 (at 0.5s) to 1.0 (at 1.0s)
+                    # This makes speed reduction more aggressive for imminent collisions
+                    time_remaining = time_to_collision - 0.5  # Time remaining after 0.5s threshold
+                    time_window = 0.5  # Window from 0.5s to 1.0s
                     
                     # Quadratic curve: ratio = (time_remaining / time_window)^2
                     # This makes early detection result in much slower speeds
                     safe_speed_ratio = max(0.0, min(1.0, (time_remaining / time_window) ** 2))
                     
-                    # Additional safety: if collision is within 1.5 seconds, reduce speed more aggressively
-                    if time_to_collision < 1.5:
+                    # Additional safety: if collision is within 0.7 seconds, reduce speed more aggressively
+                    if time_to_collision < 0.7:
                         safe_speed_ratio *= 0.5  # Further reduce speed by 50%
                     
                     safe_speed = current_speed * safe_speed_ratio
                     min_safe_speed = min(min_safe_speed, safe_speed)
         
         # If collision detected, return the minimum safe speed
+        # Ensure minimum speed of 0.5 m/s to keep MPC problem feasible
+        min_feasible_speed = 0.5
         if collision_detected:
-            return max(0.0, min_safe_speed)
+            safe_speed = max(min_feasible_speed, min_safe_speed)
+            if DEBUG_PRINTS:
+                print(f"[COLLISION DEBUG] Collision detected, returning safe_speed={safe_speed:.2f} m/s "
+                      f"(current_speed={current_speed:.2f} m/s)")
+            return safe_speed
         
         # No collision detected, return current speed (no change needed)
+        if DEBUG_PRINTS and len(final_pred_dicts) > 1:
+            print(f"[COLLISION DEBUG] No collision detected, returning current_speed={current_speed:.2f} m/s")
         return current_speed
 
     def calculate_reference_speed(self, waypoints, current_speed):
@@ -734,17 +854,31 @@ class MTRAgent(AutonomousAgent):
         dyn_vehic_list = self._build_dynamic_vehicle_list(final_pred_dicts, prediction_horizon)
         self._visualize_trajectories(final_pred_dicts, prediction_horizon, base_z)
 
-        waypoints_ = self._prepare_mpc_waypoints(closest_k_waypoint, x0, y0)
+        waypoints_ = self._prepare_mpc_waypoints(closest_k_waypoint, x0, y0, yaw0)
         self._visualize_waypoints(closest_k_waypoint, x0, y0, yaw0, goal, base_z)
         
         # Check for collision avoidance
         # Use MTR predicted trajectories for both ego and other vehicles (first 2 seconds)
         collision_safe_speed = self._check_collision_avoidance(final_pred_dicts, track_ids, x0, y0, yaw0, v0)
         
+        # Don't use ego's MTR predicted trajectory for static obstacle detection
+        # MTR predictions can be wrong and cause MPC to make incorrect turns
+        # Instead, use the waypoints themselves to find static obstacles
+        # This ensures MPC checks obstacles along the path it's supposed to follow
+        from carla_api.mpc.config import N
+        # Use waypoints for static obstacle detection (they define the intended path)
+        # Pad with current position if needed
+        obstacle_check_path = np.array([[wp[0], wp[1]] for wp in waypoints_[:N]])
+        if len(obstacle_check_path) < N:
+            # Fill remaining with last waypoint
+            last_wp = obstacle_check_path[-1] if len(obstacle_check_path) > 0 else np.array([x0, y0])
+            padding = np.tile(last_wp, (N - len(obstacle_check_path), 1))
+            obstacle_check_path = np.vstack([obstacle_check_path, padding])
+        
         t_mpc_reset_start = time.time()
         self.mpc.reset_solver(x0, y0, yaw0, v0,
-                              self.mpc.get_static_obstacles(np.array(pred_ego['pred_trajs'][traj_index][:N])),
-                              self.mpc.get_static_obstacles_soft(np.array(pred_ego['pred_trajs'][traj_index][:N])),
+                              self.mpc.get_static_obstacles(obstacle_check_path),
+                              self.mpc.get_static_obstacles_soft(obstacle_check_path),
                               waypoints_)
         t_mpc_reset = time.time() - t_mpc_reset_start
 
@@ -752,6 +886,13 @@ class MTRAgent(AutonomousAgent):
         reference_speed = self.calculate_reference_speed(closest_k_waypoint, v0)
         # Apply collision avoidance: use the minimum of reference speed and collision-safe speed
         reference_speed = min(reference_speed, collision_safe_speed)
+        
+        # Ensure minimum speed to keep MPC problem feasible
+        # MPC needs sufficient speed to solve the optimization problem
+        # If speed is too low, MPC becomes infeasible, especially when turning
+        from carla_api.mpc.config import MIN_SPEED
+        min_feasible_speed = 1.0  # Minimum speed for MPC feasibility (increased from 0.3)
+        reference_speed = max(reference_speed, min_feasible_speed)
         self._print_debug_info(x0, y0, yaw0, closest_k_waypoint, waypoints_, v0, reference_speed)
         
         t_mpc_update_start = time.time()
@@ -766,12 +907,30 @@ class MTRAgent(AutonomousAgent):
             wheel_angle, acceleration = self.mpc.get_controls_value()
             throttle, brake, steer = self.mpc.process_control_inputs(wheel_angle, acceleration)
             control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
+            self.mpc_failure_count = 0  # Reset failure count on success
             if DEBUG_PRINTS:
                 print(f"[MPC SUCCESS] Steer: {steer:.3f} ({np.rad2deg(wheel_angle):.1f}°), Throttle: {throttle:.3f}, Brake: {brake:.3f}")
         else:
-            print("[AGENT] ✗✗✗ MPC FAILED - Falling back to BehaviorAgent")
-            self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
-            control = self.temp_agent.run_step()
+            self.mpc_failure_count += 1
+            print(f"[AGENT] ✗✗✗ MPC FAILED ({self.mpc_failure_count} consecutive failures) - Falling back to BehaviorAgent")
+            print(f"[AGENT] Ego state: x={x0:.2f}, y={y0:.2f}, yaw={np.rad2deg(yaw0):.1f}°, v={v0:.2f} m/s")
+            print(f"[AGENT] Reference speed: {reference_speed:.2f} m/s")
+            print(f"[AGENT] Waypoints: {len(waypoints_)} points")
+            if len(waypoints_) > 0:
+                print(f"[AGENT] First waypoint: ({waypoints_[0][0]:.2f}, {waypoints_[0][1]:.2f})")
+            
+            # If MPC fails repeatedly, increase reference speed to help recovery
+            if self.mpc_failure_count > 5:
+                print(f"[AGENT] Multiple MPC failures detected - attempting recovery with higher speed")
+                # Try to recover by using BehaviorAgent with higher target speed
+                self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
+                control = self.temp_agent.run_step()
+                # Increase throttle to help vehicle recover
+                if control.throttle < 0.5:
+                    control.throttle = min(0.8, control.throttle + 0.3)
+            else:
+                self.temp_agent.set_destination(carla.Location(goal[0], goal[1], 0))
+                control = self.temp_agent.run_step()
             control.manual_gear_shift = False
 
         self.last_control = control
